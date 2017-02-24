@@ -67,17 +67,9 @@ Options:
 import sys  # Because sys.stderr.write() is called bellow
 from io import BytesIO
 
-# FIXME: This is necessary to allow using isbg both straight from the repo and installed / as an import.
-# We should probably decide to not care about running isbg as top-level script straight from the repo.
-try:
-    from .sa_unwrap import unwrap
-except:
-    try:
-        from sa_unwrap import unwrap
-    except ImportError:
-        sys.stderr.write('Cannot load sa_unwrap, please install isbg package properly!\n')
-        # Create No-Op dummy function
-        unwrap = lambda x: None
+from isbg.imap import ISBGImap
+from isbg.base import ISBGError, ISBGImapError
+from isbg.sa_unwrap import unwrap
 
 try:
     from docopt import docopt  # Creating command-line interface
@@ -101,9 +93,6 @@ try:
     from hashlib import md5
 except ImportError:
     from md5 import md5
-
-class ISBGError(Exception):
-    pass
 
 def errorexit(msg, exitcode):
     sys.stderr.write(msg)
@@ -142,20 +131,6 @@ def crnlify(text):
     # we have to do it twice to work right since the re includes
     # the char preceding \n
     return re.sub(crnlre, "\\1\r\n", re.sub(crnlre, "\\1\r\n", text))
-
-def truncate(inp, length):
-    if len(inp) > length:
-        return repr(inp)[:length-3] + '...'
-    else:
-        return inp
-
-def shorten(inp, length):
-    if isinstance(inp, dict):
-        return dict([(k, shorten(v, length)) for k,v in inp.items()])
-    elif isinstance(inp, list) or isinstance(inp, tuple):
-        return [ shorten(x, length) for x in inp]
-    else:
-        return truncate(inp, length)
 
 def imapflags(flaglist):
     return '(' + ','.join(flaglist) + ')'
@@ -335,36 +310,6 @@ class ISBG:
             res[i] = chr(ord(res[i]) ^ ord(pw[i]))
         return ''.join(res)
 
-    # Retrieve the entire message
-    def getmessage(self, uid, append_to=None):
-        res = self.imap.uid("FETCH", uid, "(BODY.PEEK[])")
-        self.assertok(res, 'uid fetch', uid, '(BODY.PEEK[])')
-        if res[0] != "OK":
-            self.assertok(res, 'uid fetch', uid, '(BODY.PEEK[])')
-            try:
-                body = res[1][0][1]
-            except:
-                self.exception('IMAP Message not in expected format!')
-                if self.verbose:
-                    self.logger.warning("Confused - rfc822 fetch gave {} - The message was probably deleted while we were running".format(res))
-                if append_to is not None:
-                    append_to.append(int(uid))
-        else:
-            body = res[1][0][1]
-        return body
-
-    # This function checks that the return code is OK
-    # It also prints out what happened (which would end
-    # up /dev/null'ed in non-verbose mode)
-    def assertok(self, res, *args):
-        if 'fetch' in args[0] and not self.verbose_mails:
-            res = shorten(res, 100)
-        self.logger.debug("{} = {}".format(args,res))
-        if res[0] != "OK":
-            self.logger.error("{} returned {} - aborting")
-            errorexit("\n%s returned %s - aborting\n"
-                      % (repr(args), res), self.exitcodeimap if self.exitcodes else -1)
-
     def parse_args(self):
         # Argument processing
         try:
@@ -454,16 +399,6 @@ class ISBG:
             else:
                 self.imapport = 993
 
-    def get_uidvalidity(self, mailbox):
-        uidvalidity = 0
-        mbstatus = self.imap.status(mailbox, '(UIDVALIDITY)')
-        if mbstatus[0] == 'OK':
-            body = mbstatus[1][0].decode()
-            m = re.search('UIDVALIDITY ([0-9]+)', body)
-            if m is not None:
-                uidvalidity = int(m.groups()[0])
-        return uidvalidity
-
     def pastuid_read(self, uidvalidity, folder='inbox'):
         # pastuids keeps track of which uids we have already seen, so
         # that we don't analyze them multiple times. We store its
@@ -498,17 +433,19 @@ class ISBG:
         uids = []
 
         # check spaminbox exists by examining it
-        res = self.imap.select(self.spaminbox, 1)
-        self.assertok(res, 'select', self.spaminbox, 1)
+        try:
+            self.imap.select(self.spaminbox)
+        except ISBGImapError:
+            self.logger.exception('Could not select spam inbox, aborting SA processing.')
+            raise
 
         # select inbox
-        res = self.imap.select(self.imapinbox, 1)
-        self.assertok(res, 'select', self.imapinbox, 1)
+        self.imap.select(self.imapinbox)
 
-        uidvalidity = self.get_uidvalidity(self.imapinbox)
+        uidvalidity = self.imap.get_uidvalidity(self.imapinbox)
 
         # get the uids of all mails with a size less then the maxsize
-        typ, inboxuids = self.imap.uid("SEARCH", None, "SMALLER", str(self.maxsize))
+        typ, inboxuids = self.imap.search(None, "SMALLER", str(self.maxsize))
         inboxuids = inboxuids[0].split()
         inboxuids = [x.decode() for x in inboxuids]
 
@@ -539,7 +476,8 @@ class ISBG:
         # Main loop that iterates over each new uid we haven't seen before
         for u in uids:
             # Retrieve the entire message
-            body = self.getmessage(u, newpastuids)
+            body = self.imap.getmessage(u)
+            newpastuids.append(u)
             # Unwrap spamassassin reports
             unwrapped = unwrap(BytesIO(body))
             if unwrapped is not None and len(unwrapped) > 0:
@@ -609,19 +547,19 @@ class ISBG:
                             continue
                         p.stdin.close()
                         body = crnlify(body)
-                        res = self.imap.append(self.spaminbox, None, None, body)
-                        # The above will fail on some IMAP servers for various reasons.
-                        # we print out what happened and continue processing
-                        if res[0] != 'OK':
-                            self.logger.error("{} failed for uid {}: {}. Leaving original message alone.".format(repr(["append", self.spaminbox, "{body}"]), repr(u), repr(res)))
+
+                        # This will fail on some IMAP servers for various reasons.
+                        # We log what happened and continue processing
+                        try:
+                            res = self.imap.append(self.spaminbox, None, None, body)
+                        except ISBGImapError:
+                            self.logger.exception('IMAP append fail. Ignoring this message.')
                             continue
                 else:
                     if self.dryrun:
                         self.logger.info("Skipping copy to spambox because of --dryrun")
                     else:
-                        # just copy it as is
-                        res = self.imap.uid("COPY", u, self.spaminbox)
-                        self.assertok(res, "uid copy", u, self.spaminbox)
+                        self.imap.copy(u, self.spaminbox)
 
                 spamlist.append(u)
 
@@ -637,26 +575,21 @@ class ISBG:
                 self.logger.info('Skipping labelling/expunging of mails because of --dryrun')
             else:
                 res = self.imap.select(self.imapinbox)
-                self.assertok(res, 'select', self.imapinbox)
                 # Only set message flags if there are any
-                if len(spamflags) > 2:
+                if len(self.spamflags) > 0:
                     for u in spamlist:
-                        res = self.imap.uid("STORE", u, self.spamflagscmd, imapflags(self.spamflags))
-                        self.assertok(res, "uid store", u, self.spamflagscmd, imapflags(spamflags))
+                        self.imap.store(u, self.spamflagscmd, self.spamflags)
                         newpastuids.append(u)
                 # If its gmail, and --delete was passed, we actually copy!
                 if self.delete and self.gmail:
                     for u in spamlist:
-                        res = self.imap.uid("COPY", u, "[Gmail]/Trash")
-                        self.assertok(res, "uid copy", u, "[Gmail]/Trash")
+                        self.imap.copy(u, "[Gmail]/Trash")
                 # Set deleted flag for spam with high score
                 for u in spamdeletelist:
                     if self.gmail is True:
-                        res = self.imap.uid("COPY", u, "[Gmail]/Trash")
-                        self.assertok(res, "uid copy", u, "[Gmail]/Trash")
+                        self.imap.copy(u, "[Gmail]/Trash")
                     else:
-                        res = self.imap.uid("STORE", u, self.spamflagscmd, "(\\Deleted)")
-                        self.assertok(res, "uid store", u, self.spamflagscmd, "(\\Deleted)")
+                        self.imap.store("STORE", u, self.spamflagscmd, "(\\Deleted)")
                 if self.expunge:
                     self.imap.expunge()
 
@@ -684,24 +617,23 @@ class ISBG:
             n_tolearn = 0
             if learntype['inbox']:
                 self.logger.debug("Teach {} to SA from: {}".format(learntype['learntype'], learntype['inbox']))
-                uidvalidity = self.get_uidvalidity(learntype['inbox'])
+                uidvalidity = self.imap.get_uidvalidity(learntype['inbox'])
                 origpastuids = self.pastuid_read(uidvalidity, folder=learntype['learntype'])
                 newpastuids = []
                 res = self.imap.select(learntype['inbox'])
-                self.assertok(res, 'select', learntype['inbox'])
                 if self.learnunflagged:
-                    typ, uids = self.imap.uid("SEARCH", None, "UNFLAGGED")
+                    typ, uids = self.imap.search(None, "UNFLAGGED")
                 elif self.learnflagged:
-                    typ, uids = self.imap.uid("SEARCH", None, "(FLAGGED)")
+                    typ, uids = self.imap.search(None, "(FLAGGED)")
                 else:
-                    typ, uids = self.imap.uid("SEARCH", None, "ALL")
+                    typ, uids = self.imap.search(None, "ALL")
                 uids = uids[0].split()
                 uids = [u for u in uids if int(u) not in origpastuids]
                 n_tolearn = len(uids)
 
 
                 for u in uids:
-                    body = self.getmessage(u)
+                    body = self.imap.getmessage(u)
                     # Unwrap spamassassin reports
                     unwrapped = unwrap(BytesIO(body))
                     if unwrapped is not None and len(unwrapped) > 0:
@@ -715,7 +647,7 @@ class ISBG:
                         else:
                             p = Popen(["spamc", "--learntype=" + learntype['learntype']], stdin=PIPE, stdout=PIPE, close_fds=True)
                         try:
-                            out = p.communicate(body)[0]
+                            out = p.communicate(body)[0].decode(errors='replace')
                         except:
                             self.logger.exception('spamc error for mail {}'.format(u))
                             self.logger.debug(repr(body))
@@ -724,24 +656,20 @@ class ISBG:
                         p.stdin.close()
                     if code == 69 or code == 74:
                         errorexit("spamd is misconfigured (use --allow-tell)", self.exitcodeflags)
-                    if not out.strip().decode() == self.alreadylearnt:
+                    if not out.strip() == self.alreadylearnt:
                         n_learnt += 1
                     newpastuids.append(int(u))
                     self.logger.debug("{} {}".format(u, out))
                     if not self.dryrun:
                         if self.learnthendestroy:
                             if self.gmail:
-                                res = self.imap.uid("COPY", u, "[Gmail]/Trash")
-                                self.assertok(res, "uid copy", u, "[Gmail]/Trash")
+                                res = self.imap.copy(u, "[Gmail]/Trash")
                             else:
-                                res = self.imap.uid("STORE", u, self.spamflagscmd, "(\\Deleted)")
-                                self.assertok(res, "uid store", u, self.spamflagscmd, "(\\Deleted)")
+                                res = self.imap.store(u, self.spamflagscmd, "(\\Deleted)")
                         elif learntype['moveto'] is not None:
-                            res = self.imap.uid("COPY", u, learntype['moveto'])
-                            self.assertok(res, "uid copy", u, learntype['moveto'])
+                            res = self.imap.copy(u, learntype['moveto'])
                         elif self.learnthenflag:
-                            res = self.imap.uid("STORE", u, self.spamflagscmd, "(\\Flagged)")
-                            self.assertok(res, "uid store", u, self.spamflagscmd, "(\\Flagged)")
+                            res = self.imap.copy(u, self.spamflagscmd, "(\\Flagged)")
                 self.pastuid_write(uidvalidity, origpastuids, newpastuids, folder=learntype['learntype'])
             result.append((n_tolearn, n_learnt))
 
@@ -841,19 +769,14 @@ class ISBG:
 
         # Main code starts here
 
-        if self.nossl:
-            self.imap = imaplib.IMAP4(self.imaphost, self.imapport)
-        else:
-            self.imap = imaplib.IMAP4_SSL(self.imaphost, self.imapport)
+        self.imap = ISBGImap(self.imaphost, self.imapport, not self.nossl)
 
         # Authenticate (only simple supported)
-        res = self.imap.login(self.imapuser, self.imappasswd)
-        self.assertok(res, "login", self.imapuser, 'xxxxxxxx')
+        self.imap.connect(self.imapuser, self.imappasswd)
 
         # List imap directories
         if self.imaplist:
             imap_list = self.imap.list()
-            self.assertok(imap_list, "list")
             dirlist = str([x.decode() for x in imap_list[1]])
             dirlist = re.sub('\(.*?\)| \".\" \"|\"\', \''," ",dirlist) # string formatting
             self.logger.info(dirlist)
