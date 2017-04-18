@@ -677,6 +677,8 @@ class ISBG:
 
     def do_isbg(self):
 
+        self.result = {}
+
         if self.spamc:
             self.satest = ["spamc", "-c"]
             self.sasave = ["spamc"]
@@ -786,9 +788,21 @@ class ISBG:
         s_tolearn, s_learnt = learned[0]
         h_tolearn, h_learnt = learned[1]
 
+        self.result['learned'] = {
+                'spam_messages': s_tolearn,
+                'spam_learnt': s_learnt,
+                'ham_messages': h_tolearn,
+                'ham_learnt': h_learnt,
+            }
+
         # Spamassassin processing
         if not self.teachonly:
             numspam, nummsg, spamdeleted = self.spamassassin()
+            self.result['spamassassin'] = {
+                    'spam_msg': numspam,
+                    'all_msg': nummsg,
+                    'spam_deleted': spamdeleted
+                }
 
         # sign off
         self.imap.logout()
@@ -827,6 +841,4 @@ def isbg_run():
 
 if __name__ == '__main__':
     isbg_run()
-
-
 
