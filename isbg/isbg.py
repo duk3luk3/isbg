@@ -148,7 +148,6 @@ class ISBG:
 
     def __init__(self):
         self.logger = logging.getLogger(__name__)
-        self.logger.setLevel(logging.DEBUG)
 
         self.set_imap_opts(
             imaphost='localhost',
@@ -248,6 +247,10 @@ class ISBG:
         self.noreport = noreport
         self.exitcodes = exitcodes
         self.verbose = verbose
+        if verbose:
+            self.logger.setLevel(logging.DEBUG)
+        else:
+            self.logger.setLevel(logging.DEBUG)
         self.verbose_mails = verbose_mails
 
     def set_processing_opts(self, dryrun, maxsize, teachonly, spamc, gmail):
@@ -781,7 +784,7 @@ class ISBG:
             imap_list = self.imap.list()
             dirlist = str([x.decode() for x in imap_list[1]])
             dirlist = re.sub('\(.*?\)| \".\" \"|\"\', \''," ",dirlist) # string formatting
-            self.logger.info(dirlist)
+            self.logger.debug(dirlist)
 
         # Spamassassin training
         learned = self.spamlearn()
@@ -810,12 +813,12 @@ class ISBG:
 
         if self.nostats is False:
             if self.learnspambox is not None:
-                self.logger.info(("%d/%d spams learnt") % (s_learnt, s_tolearn))
+                self.logger.debug(("%d/%d spams learnt") % (s_learnt, s_tolearn))
             if self.learnhambox:
-                self.logger.info(("%d/%d hams learnt") % (h_learnt, h_tolearn))
+                self.logger.debug(("%d/%d hams learnt") % (h_learnt, h_tolearn))
             if not self.teachonly:
-                self.logger.info(("%d spams found in %d messages") % (numspam, nummsg))
-                self.logger.info(("%d/%d was automatically deleted") % (spamdeleted, numspam))
+                self.logger.debug(("%d spams found in %d messages") % (numspam, nummsg))
+                self.logger.debug(("%d/%d was automatically deleted") % (spamdeleted, numspam))
 
         if self.exitcodes:
             if not self.teachonly:
