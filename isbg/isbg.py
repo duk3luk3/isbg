@@ -672,7 +672,7 @@ class ISBG:
                         elif learntype['moveto'] is not None:
                             res = self.imap.copy(u, learntype['moveto'])
                         elif self.learnthenflag:
-                            res = self.imap.copy(u, self.spamflagscmd, "(\\Flagged)")
+                            res = self.imap.store(u, self.spamflagscmd, "(\\Flagged)")
                 self.pastuid_write(uidvalidity, origpastuids, newpastuids, folder=learntype['learntype'])
             result.append((n_tolearn, n_learnt))
 
