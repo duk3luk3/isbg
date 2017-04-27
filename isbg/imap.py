@@ -31,7 +31,7 @@ class ISBGImap:
         Format a list of flags the way the STORE command wants it
         """
         # if we get a string, pass it through
-        if isinstance(obj, basestring):
+        if isinstance(flags, str):
             return flags
         else:
             return '(' + ','.join(flaglist) + ')'
