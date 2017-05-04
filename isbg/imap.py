@@ -127,7 +127,7 @@ class ISBGImap:
 
     def store(self, uid, command, flags):
         res = self.imap.uid("STORE", uid, command, self._imapflags(flags))
-        self._assertok(res, 'uid copy', uid, command)
+        self._assertok(res, 'uid store', uid, command)
         return res
 
     def search(self, charset, criterion, *args):

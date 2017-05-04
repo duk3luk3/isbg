@@ -386,7 +386,7 @@ class ISBG:
         self.learnunflagged = self.opts.get('--learnunflagged', False)
         self.learnflagged = self.opts.get('--learnflagged', False)
         self.learnthendestroy = self.opts.get('--learnthendestroy', False)
-        self.learnthenflag = self.opts.get('--learnthendestroy', False)
+        self.learnthenflag = self.opts.get('--learnthenflag', False)
         self.expunge = self.opts.get('--expunge', False)
 
         self.teachonly = self.opts.get('--teachonly', False)
@@ -672,6 +672,7 @@ class ISBG:
                         elif learntype['moveto'] is not None:
                             res = self.imap.copy(u, learntype['moveto'])
                         elif self.learnthenflag:
+                            self.logger.debug('Flagging uid {}'.format(u))
                             res = self.imap.store(u, self.spamflagscmd, "(\\Flagged)")
                 self.pastuid_write(uidvalidity, origpastuids, newpastuids, folder=learntype['learntype'])
             result.append((n_tolearn, n_learnt))
