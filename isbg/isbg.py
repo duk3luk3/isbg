@@ -776,6 +776,7 @@ class ISBG:
         # Main code starts here
 
         self.imap = ISBGImap(self.imaphost, self.imapport, not self.nossl)
+        self.imap.logger.setLevel(self.logger.getEffectiveLevel())
 
         # Authenticate (only simple supported)
         self.imap.connect(self.imapuser, self.imappasswd)
