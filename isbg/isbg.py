@@ -401,6 +401,10 @@ class ISBG(object):
     def pastuid_write(self, uidvalidity, origpastuids, newpastuids,
                       folder='inbox'):
         """Write the uids in a file for the folder."""
+        if self.dryrun:
+            self.logger.debug(__(('Skipping pastuids write due to dryrun')))
+            return
+
         if self.trackfile is None:
             self.trackfile = ISBG.set_filename(self.imapsets, "track")
 
